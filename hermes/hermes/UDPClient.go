@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"io"
+	"log"
 	"net"
 	"time"
 )
@@ -164,7 +165,9 @@ func (c *UDPClient) SendData(packet io.Writer) error {
 	}
 
 	var err error
-	p.Size, err = packet.Write(c.OutputBuffer[c.currentOutputBuffer:])
+	p.Size, err = packet.Write(c.OutputBuffer[c.currentOutputBuffer:c.OutputMaxSize])
+
+	log.Println("ça passe")
 	if err != nil {
 		return err
 	}

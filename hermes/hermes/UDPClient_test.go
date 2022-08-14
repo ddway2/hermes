@@ -1,6 +1,9 @@
 package hermes
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 type DummyPacket struct {
 	Value string
@@ -34,6 +37,7 @@ func BenchmarkConnect(b *testing.B) {
 	p2 := &DummyPacket{}
 	for i := 0; i < 1000000; i++ {
 		p2.Value = "toto"
+		fmt.Printf("step: %v\n", i)
 		c1.SendData(p2)
 	}
 
