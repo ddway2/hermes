@@ -1,8 +1,6 @@
 package hermes
 
 import (
-	"io"
-	"log"
 	"net"
 	"time"
 )
@@ -21,13 +19,9 @@ const (
 type UDPClient struct {
 	DNS              string
 	OutputTimeoutMs  uint32
-	OutputBufferSize uint32
-	OutputBuffer     []byte
 	OutputPacketSize uint32
 	OutputMaxSize    uint32
 	InputTimeoutMs   uint32
-	InputBufferSize  uint32
-	InputBuffer      []byte
 	InputPacketSize  uint32
 	InputMaxSize     uint32
 
@@ -52,21 +46,27 @@ func NewUDPClient() *UDPClient {
 		done: make(chan error, 1),
 
 		OutputTimeoutMs:  CLIENTUDP_DEFAULT_OutputTimeoutMs,
-		OutputBufferSize: CLIENTUDP_DEFAULT_OutputBufferSize,
 		OutputPacketSize: CLIENTUDP_DEFAULT_OutputPacketSize,
 		OutputMaxSize:    CLIENTUDP_DEFAULT_OutputMaxSize,
 		InputTimeoutMs:   CLIENTUDP_DEFAULT_InputTimeoutMs,
-		InputBufferSize:  CLIENTUDP_DEFAULT_InputBufferSize,
 		InputPacketSize:  CLIENTUDP_DEFAULT_InputPacketSize,
 		InputMaxSize:     CLIENTUDP_DEFAULT_InputMaxSize,
 	}
 }
 
 func (c *UDPClient) init() error {
-	c.InputBuffer = make([]byte, c.InputBufferSize)
 	c.InputPacket = make([]*Packet, c.InputPacketSize)
-	c.OutputBuffer = make([]byte, c.OutputBufferSize)
+	for i := 0; i < int(c.InputPacketSize); i++ {
+		p := &Packet{}
+		p.Data.Grow(c.InputMaxSize)
+		c.InputPacket = append(c.InputPacket, p)
+	}
 	c.OutputPacket = make([]*Packet, c.OutputPacketSize)
+	for i := 0; i < int(c.OutputPacketSize); i++ {
+		p := &Packet{}
+		p.Data.Grow(c.OutputMaxSize)
+		c.OutputPacket = append(c.OutputPacket, p)
+	}
 
 	c.InputStream = make(chan *Packet, c.InputPacketSize)
 	c.OutputStream = make(chan *Packet, c.OutputPacketSize)
@@ -133,9 +133,7 @@ func (c *UDPClient) receiveData() {
 		deadline := time.Now().Add(time.Duration(c.InputTimeoutMs) * time.Millisecond)
 		c.conn.SetReadDeadline(deadline)
 
-		if c.currentInputBuffer+c.InputMaxSize >= c.InputBufferSize {
-			c.currentInputBuffer = 0
-		}
+		p := c.InputPacket[c.currentInputPacket]
 
 		n, err := c.conn.Read(c.InputBuffer[c.currentInputBuffer:])
 		if err != nil {
@@ -147,43 +145,33 @@ func (c *UDPClient) receiveData() {
 			}
 		}
 
-		p := c.InputPacket[c.currentInputPacket]
 		c.currentInputPacket = (c.currentInputPacket + 1) % c.InputPacketSize
-		c.currentInputBuffer = c.currentInputBuffer + uint32(n)
-		p.Ptr = c.currentInputBuffer
-		p.Size = n
 		c.InputStream <- p
 	}
 }
 
-func (c *UDPClient) SendData(packet io.Writer) error {
+func (c *UDPClient) SendData(packet Serialize) error {
 	p := c.OutputPacket[c.currentOutputPacket]
+	p.Data.Reset()
 	c.currentOutputPacket = (c.currentOutputPacket + 1) % c.OutputPacketSize
 
-	if c.currentInputBuffer+c.OutputMaxSize >= c.OutputBufferSize {
-		c.currentInputBuffer = 0
-	}
-
 	var err error
-	p.Size, err = packet.Write(c.OutputBuffer[c.currentOutputBuffer:c.OutputMaxSize])
+	err = packet.Write(p.Data)
 
-	log.Println("ça passe")
 	if err != nil {
 		return err
 	}
-	p.Ptr = c.currentOutputBuffer
-	c.currentOutputBuffer = c.currentOutputBuffer + uint32(p.Size)
 
 	// Let Go
 	c.OutputStream <- p
 	return nil
 }
 
-func (c *UDPClient) ReceiveData(packet io.Reader) error {
+func (c *UDPClient) ReceiveData(packet Deserialize) error {
 	var err error
 	select {
 	case p := <-c.InputStream:
-		_, err = packet.Read(c.InputBuffer[p.Ptr:p.Size])
+		err = packet.Read(p.Data)
 	case err = <-c.done:
 	}
 	return err

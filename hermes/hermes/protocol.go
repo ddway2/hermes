@@ -1,11 +1,17 @@
 package hermes
 
+import "bytes"
+
+type Serialize interface {
+	Write(b *bytes.Buffer) error
+}
+
 type Deserialize interface {
-	Read(buffer []byte) (uint32, error)
+	Read(b *bytes.Buffer) error
 }
 
 type Packet struct {
-	Ptr  uint32
+	Data bytes.Buffer
 	Size int
 }
 

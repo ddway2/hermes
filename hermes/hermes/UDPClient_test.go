@@ -30,7 +30,9 @@ func BenchmarkConnect(b *testing.B) {
 	go func() {
 		for {
 			p := &DummyPacket{}
-			c1.ReceiveData(p)
+			if err := c1.ReceiveData(p); err != nil {
+				return
+			}
 		}
 	}()
 
