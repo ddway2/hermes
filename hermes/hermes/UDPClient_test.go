@@ -9,14 +9,14 @@ type DummyPacket struct {
 	Value string
 }
 
-func (p *DummyPacket) Write(data []byte) (int, error) {
-	data = []byte(p.Value)
-	return len(p.Value), nil
+func (p *DummyPacket) Write(b *bytes.Buffer) error {
+	_, err := b.WriteString(p.Value)
+	return err
 }
 
-func (p *DummyPacket) Read(data []byte) (int, error) {
-	p.Value = string(data)
-	return len(p.Value), nil
+func (p *DummyPacket) Read(b *bytes.Buffer) error {
+
+	return nil
 }
 
 func BenchmarkConnect(b *testing.B) {

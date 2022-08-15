@@ -111,7 +111,7 @@ func (c *UDPClient) sendData() {
 		case p = <-c.OutputStream:
 			deadline := time.Now().Add(time.Duration(c.OutputTimeoutMs) * time.Millisecond)
 			c.conn.SetWriteDeadline(deadline)
-			_, err := c.conn.Write(c.OutputBuffer[p.Ptr : p.Ptr+uint32(p.Size)])
+			_, err := c.conn.Write(p.Data.Bytes())
 			if err != nil {
 				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 					//timeout = true
@@ -134,8 +134,9 @@ func (c *UDPClient) receiveData() {
 		c.conn.SetReadDeadline(deadline)
 
 		p := c.InputPacket[c.currentInputPacket]
+		p.Data.Reset()
 
-		n, err := c.conn.Read(c.InputBuffer[c.currentInputBuffer:])
+		_, err := c.conn.Read(p.data)
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 				continue
