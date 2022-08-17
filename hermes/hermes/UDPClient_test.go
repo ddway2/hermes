@@ -1,22 +1,23 @@
 package hermes
 
 import (
-	"fmt"
+	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
 type DummyPacket struct {
-	Value string
+	Index uint64
 }
 
 func (p *DummyPacket) Write(b *bytes.Buffer) error {
-	_, err := b.WriteString(p.Value)
+	err := binary.Write(b, binary.LittleEndian, p.Index)
 	return err
 }
 
 func (p *DummyPacket) Read(b *bytes.Buffer) error {
-
-	return nil
+	err := binary.Read(b, binary.LittleEndian, &p.Index)
+	return err
 }
 
 func BenchmarkConnect(b *testing.B) {
@@ -37,9 +38,8 @@ func BenchmarkConnect(b *testing.B) {
 	}()
 
 	p2 := &DummyPacket{}
-	for i := 0; i < 1000000; i++ {
-		p2.Value = "toto"
-		fmt.Printf("step: %v\n", i)
+	for i := 0; i < b.N; i++ {
+		p2.Index = uint64(i)
 		c1.SendData(p2)
 	}
 

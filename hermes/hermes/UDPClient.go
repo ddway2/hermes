@@ -6,24 +6,22 @@ import (
 )
 
 const (
-	CLIENTUDP_DEFAULT_OutputTimeoutMs  = 500
-	CLIENTUDP_DEFAULT_OutputBufferSize = 1024 * 1024
-	CLIENTUDP_DEFAULT_OutputPacketSize = 500
+	CLIENTUDP_DEFAULT_OutputTimeoutMs  = 50
+	CLIENTUDP_DEFAULT_OutputPacketSize = 50000
 	CLIENTUDP_DEFAULT_OutputMaxSize    = 1300
-	CLIENTUDP_DEFAULT_InputTimeoutMs   = 500
-	CLIENTUDP_DEFAULT_InputBufferSize  = 1024 * 1024
-	CLIENTUDP_DEFAULT_InputPacketSize  = 500
+	CLIENTUDP_DEFAULT_InputTimeoutMs   = 50
+	CLIENTUDP_DEFAULT_InputPacketSize  = 50000
 	CLIENTUDP_DEFAULT_InputMaxSize     = 1300
 )
 
 type UDPClient struct {
 	DNS              string
 	OutputTimeoutMs  uint32
-	OutputPacketSize uint32
-	OutputMaxSize    uint32
+	OutputPacketSize int
+	OutputMaxSize    int
 	InputTimeoutMs   uint32
-	InputPacketSize  uint32
-	InputMaxSize     uint32
+	InputPacketSize  int
+	InputMaxSize     int
 
 	OutputPacket []*Packet
 	InputPacket  []*Packet
@@ -31,11 +29,11 @@ type UDPClient struct {
 	InputStream  chan *Packet
 	OutputStream chan *Packet
 
-	currentInputBuffer uint32
-	currentInputPacket uint32
+	currentInputBuffer int
+	currentInputPacket int
 
-	currentOutputBuffer uint32
-	currentOutputPacket uint32
+	currentOutputBuffer int
+	currentOutputPacket int
 
 	conn *net.UDPConn
 	done chan error
@@ -56,16 +54,16 @@ func NewUDPClient() *UDPClient {
 
 func (c *UDPClient) init() error {
 	c.InputPacket = make([]*Packet, c.InputPacketSize)
-	for i := 0; i < int(c.InputPacketSize); i++ {
+	for i := 0; i < c.InputPacketSize; i++ {
 		p := &Packet{}
 		p.Data.Grow(c.InputMaxSize)
-		c.InputPacket = append(c.InputPacket, p)
+		c.InputPacket[i] = p
 	}
 	c.OutputPacket = make([]*Packet, c.OutputPacketSize)
-	for i := 0; i < int(c.OutputPacketSize); i++ {
+	for i := 0; i < c.OutputPacketSize; i++ {
 		p := &Packet{}
 		p.Data.Grow(c.OutputMaxSize)
-		c.OutputPacket = append(c.OutputPacket, p)
+		c.OutputPacket[i] = p
 	}
 
 	c.InputStream = make(chan *Packet, c.InputPacketSize)
@@ -127,7 +125,7 @@ func (c *UDPClient) sendData() {
 }
 
 func (c *UDPClient) receiveData() {
-
+	rdbuf := make([]byte, c.InputMaxSize)
 	for {
 
 		deadline := time.Now().Add(time.Duration(c.InputTimeoutMs) * time.Millisecond)
@@ -136,7 +134,7 @@ func (c *UDPClient) receiveData() {
 		p := c.InputPacket[c.currentInputPacket]
 		p.Data.Reset()
 
-		_, err := c.conn.Read(p.data)
+		n, err := c.conn.Read(rdbuf)
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 				continue
@@ -146,6 +144,7 @@ func (c *UDPClient) receiveData() {
 			}
 		}
 
+		p.Data.Write(rdbuf[:n])
 		c.currentInputPacket = (c.currentInputPacket + 1) % c.InputPacketSize
 		c.InputStream <- p
 	}
@@ -157,7 +156,7 @@ func (c *UDPClient) SendData(packet Serialize) error {
 	c.currentOutputPacket = (c.currentOutputPacket + 1) % c.OutputPacketSize
 
 	var err error
-	err = packet.Write(p.Data)
+	err = packet.Write(&p.Data)
 
 	if err != nil {
 		return err
@@ -172,7 +171,7 @@ func (c *UDPClient) ReceiveData(packet Deserialize) error {
 	var err error
 	select {
 	case p := <-c.InputStream:
-		err = packet.Read(p.Data)
+		err = packet.Read(&p.Data)
 	case err = <-c.done:
 	}
 	return err

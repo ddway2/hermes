@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "test",
             "program": "${workspaceRoot}\\hermes\\hermes",
-            "args": ["-test.bench", "."]
+            "args": ["-test.bench", ".", "-test.benchmem"]
         }
     ]
 }

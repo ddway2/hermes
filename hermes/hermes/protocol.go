@@ -1,6 +1,9 @@
 package hermes
 
-import "bytes"
+import (
+	"bytes"
+	"encoding/binary"
+)
 
 type Serialize interface {
 	Write(b *bytes.Buffer) error
@@ -18,7 +21,7 @@ type Packet struct {
 type InitPackage struct {
 }
 
-type Flag uint8
+type Flag uint16
 
 const (
 	FlagPush Flag = 1 << iota
@@ -26,10 +29,20 @@ const (
 	FlagReset
 )
 
-type Package struct {
+type PacketLayer struct {
 	Seq  uint16
 	Ack  uint16
 	Flag Flag
 	Crc  uint16
-	Data []byte
+	Data [100]byte // Only 100 bytes
+}
+
+func (p *PacketLayer) Write(b *bytes.Buffer) error {
+	binary.Write(b, binary.LittleEndian, p)
+	return nil
+}
+
+func (p *PacketLayer) Read(b *bytes.Buffer) error {
+	binary.Read(b, binary.LittleEndian, p)
+	return nil
 }

@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	SERVERUDP_DEFAULT_InputTimeoutMs  = 500
+	SERVERUDP_DEFAULT_InputTimeoutMs  = 10
 	SERVERUDP_DEFAULT_InputBufferSize = 1024 * 1024
-	SERVERUDP_DEFAULT_InputPacketSize = 2048
+	SERVERUDP_DEFAULT_InputPacketSize = 50000
 	SERVERUDP_DEFAULT_InputMaxSize    = 1300
 
 	SERVERUDP_DEFAULT_MaxRemoteClient = 1500
@@ -21,14 +21,13 @@ type UDPServerConn interface {
 type UDPServer struct {
 	DNS             string
 	InputTimeoutMs  uint32
-	InputBufferSize uint32
-	InputBuffer     []byte
+	InputBufferSize int
 	InputPackets    []*Packet
-	InputPacketSize uint32
-	InputMaxSize    uint32
+	InputPacketSize int
+	InputMaxSize    int
 	MaxRemoteClient uint32
 
-	currentInputBuffer uint32
+	currentInputPacket int
 
 	conn          *net.UDPConn
 	done          chan error
@@ -48,10 +47,13 @@ func newUDPServer() *UDPServer {
 }
 
 func (s *UDPServer) init() error {
-	s.InputBuffer = make([]byte, s.InputBufferSize)
 	s.udpConnection = make(map[string]UDPServerConn)
 	s.InputPackets = make([]*Packet, s.InputPacketSize)
-	s.currentInputBuffer = 0
+	for i := 0; i < s.InputPacketSize; i++ {
+		s.InputPackets[i] = &Packet{}
+		s.InputPackets[i].Data.Grow(s.InputMaxSize)
+	}
+	s.currentInputPacket = 0
 	return nil
 }
 
@@ -79,15 +81,15 @@ func (s *UDPServer) Listen(DNS string) error {
 }
 
 func (s *UDPServer) receiveData() {
+	rdbuf := make([]byte, s.InputMaxSize)
 	for {
 		deadline := time.Now().Add(time.Duration(s.InputTimeoutMs) * time.Millisecond)
 		s.conn.SetReadDeadline(deadline)
 
-		if s.currentInputBuffer+s.InputMaxSize >= s.InputBufferSize {
-			s.currentInputBuffer = 0
-		}
+		p := s.InputPackets[s.currentInputPacket]
+		p.Data.Reset()
+		n, addr, err := s.conn.ReadFromUDP(rdbuf)
 
-		n, addr, err := s.conn.ReadFromUDP(s.InputBuffer[s.currentInputBuffer:])
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 				continue
@@ -97,11 +99,10 @@ func (s *UDPServer) receiveData() {
 			}
 		}
 
-		var p Packet
-		p.Size = n
-		p.Ptr = s.currentInputBuffer
+		p.Data.Write(rdbuf[:n])
+		s.currentInputPacket = (s.currentInputPacket + 1) % s.InputPacketSize
 
-		_, err = s.conn.WriteToUDP(s.InputBuffer[p.Ptr:p.Size], addr)
+		_, err = s.conn.WriteToUDP(p.Data.Bytes(), addr)
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 				continue
@@ -110,8 +111,6 @@ func (s *UDPServer) receiveData() {
 				return
 			}
 		}
-
-		s.currentInputBuffer = s.currentInputBuffer + uint32(n)
 
 	}
 }
