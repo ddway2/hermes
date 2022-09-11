@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 
@@ -24,8 +25,34 @@ func (p *DummyPacket) Read(b *bytes.Buffer) error {
 	return err
 }
 
+type DummyServerConnection struct {
+	RemoteAddr *net.UDPAddr
+}
+
+func NewConnection() (hermes.UDPServerConn, error) {
+	return &DummyServerConnection{}, nil
+}
+
+func (c *DummyServerConnection) OnNewConnect(s *hermes.UDPServer, addr *net.UDPAddr) error {
+	c.RemoteAddr = addr
+	return nil
+}
+
+func (c *DummyServerConnection) OnReceiveData(s *hermes.UDPServer, p *hermes.Packet) error {
+	//_, err = s.conn.WriteToUDP(p.Data.Bytes(), c.RemoteAddr)
+	// if err != nil {
+	// 	if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+	// 		continue
+	// 	} else {
+	// 		s.done <- err
+	// 		return
+	// 	}
+	// }
+	return nil
+}
+
 func main() {
-	srv := hermes.NewUDPServer()
+	srv := hermes.NewUDPServer(NewConnection)
 
 	srv.Listen(":4567")
 

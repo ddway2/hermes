@@ -2,7 +2,6 @@ package hermes
 
 import (
 	"net"
-	"net/netip"
 	"time"
 )
 
@@ -16,19 +15,22 @@ const (
 )
 
 type UDPServerConn interface {
-	OnNewConnect() error
-	OnReceiveData(p *Packet) error
+	OnNewConnect(s *UDPServer, addr *net.UDPAddr) error
+	OnReceiveData(s *UDPServer, p *Packet) error
 }
 
-type NewServerConnCallback func(addr netip.AddrPort) (UDPServerConn, error)
+type NewServerConnCallback func() (UDPServerConn, error)
 
 type UDPServer struct {
-	DNS                   string
-	InputTimeoutMs        uint32
-	InputBufferSize       int
-	InputPackets          []*Packet
-	InputPacketSize       int
-	InputMaxSize          int
+	DNS             string
+	InputTimeoutMs  uint32
+	InputBufferSize int
+	InputPackets    []*Packet
+	InputPacketSize int
+	InputMaxSize    int
+
+	OutputTimeoutMs uint32
+
 	MaxRemoteClient       uint32
 	NewConnectionCallback NewServerConnCallback
 
@@ -36,7 +38,7 @@ type UDPServer struct {
 
 	conn          *net.UDPConn
 	done          chan error
-	udpConnection map[netip.AddrPort]UDPServerConn
+	udpConnection map[string]UDPServerConn
 }
 
 func NewUDPServer(cb NewServerConnCallback) *UDPServer {
@@ -82,6 +84,7 @@ func (s *UDPServer) Listen(DNS string) error {
 	s.DNS = DNS
 
 	go s.receiveData()
+	go s.sendData()
 
 	return nil
 }
@@ -89,6 +92,14 @@ func (s *UDPServer) Listen(DNS string) error {
 func (s *UDPServer) Close() error {
 	s.conn.Close()
 	return nil
+}
+
+func (s *UDPServer) sendData() {
+	for {
+		deadline := time.Now().Add(time.Duration(s.OutputTimeoutMs) * time.Millisecond)
+		s.conn.SetWriteDeadline(deadline)
+
+	}
 }
 
 func (s *UDPServer) receiveData() {
@@ -113,25 +124,14 @@ func (s *UDPServer) receiveData() {
 		p.Data.Write(rdbuf[:n])
 		s.currentInputPacket = (s.currentInputPacket + 1) % s.InputPacketSize
 
-		if v, ok := s.udpConnection[addr]; !ok {
-			if conn, err := s.NewConnectionCallback(addr); err == nil {
-				s.udpConnection[addr] = conn
-				conn.OnNewConnect()
-				conn.OnReceiveData(p)
+		if v, ok := s.udpConnection[addr.String()]; !ok {
+			if conn, err := s.NewConnectionCallback(); err == nil {
+				s.udpConnection[addr.String()] = conn
+				conn.OnNewConnect(s, addr)
+				conn.OnReceiveData(s, p)
 			}
 		} else {
-			v.OnReceiveData(p)
+			v.OnReceiveData(s, p)
 		}
-
-		_, err = s.conn.WriteToUDP(p.Data.Bytes(), addr)
-		if err != nil {
-			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
-				continue
-			} else {
-				s.done <- err
-				return
-			}
-		}
-
 	}
 }
