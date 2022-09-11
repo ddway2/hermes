@@ -1,3 +1,3 @@
-module client
+module ddway2.com/client
 
-go 1.17
+go 1.19

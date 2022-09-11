@@ -1,3 +1,3 @@
-module backend
+module ddway2.com/backend
 
-go 1.17
+go 1.19

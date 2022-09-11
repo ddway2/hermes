@@ -1,3 +1,3 @@
-module server
+module ddway2.com/server
 
-go 1.17
+go 1.19

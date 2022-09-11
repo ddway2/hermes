@@ -34,7 +34,7 @@ type UDPServer struct {
 	udpConnection map[string]UDPServerConn
 }
 
-func newUDPServer() *UDPServer {
+func NewUDPServer() *UDPServer {
 	return &UDPServer{
 		done: make(chan error, 1),
 
@@ -77,6 +77,11 @@ func (s *UDPServer) Listen(DNS string) error {
 
 	go s.receiveData()
 
+	return nil
+}
+
+func (s *UDPServer) Close() error {
+	s.conn.Close()
 	return nil
 }
 
