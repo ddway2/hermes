@@ -3,6 +3,7 @@ package hermes
 import (
 	"bytes"
 	"encoding/binary"
+	"net"
 )
 
 type Serialize interface {
@@ -14,8 +15,10 @@ type Deserialize interface {
 }
 
 type Packet struct {
-	Data bytes.Buffer
-	Size int
+	Addr  *net.UDPAddr
+	Index int
+	Data  bytes.Buffer
+	Size  int
 }
 
 type InitPackage struct {

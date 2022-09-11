@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,9 +34,6 @@ func main() {
 
 	c1.Connect("127.0.0.1:4567")
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
 	var end atomic.Bool
 	end.Store(false)
 
@@ -46,7 +42,7 @@ func main() {
 		fmt.Println("Start sending Data")
 		var i uint64 = 0
 		p2 := &DummyPacket{
-			Data: make([]byte, 110),
+			Data: make([]byte, 1100),
 		}
 		for !end.Load() {
 			p2.Index = uint64(i)
@@ -57,19 +53,17 @@ func main() {
 				fmt.Printf("Send %v UDP packets\n", i)
 			}
 		}
-		wg.Done()
 	}()
 
 	go func() {
 		p := &DummyPacket{
-			Data: make([]byte, 110),
+			Data: make([]byte, 1100),
 		}
 		for !end.Load() {
 			if err := c1.ReceiveData(p); err != nil {
 				fmt.Println("Receive error")
 			}
 		}
-		wg.Done()
 	}()
 
 	fmt.Println("Ready")
@@ -84,8 +78,6 @@ func main() {
 	dT := diffTime.Seconds()
 
 	fmt.Println("Stop required")
-	wg.Wait()
-	fmt.Println("Stop")
 
 	fmt.Printf("Recv=%f KB/s Sent=%f KB/s\n", c1.Stats.BiterateRecv(dT)/1024, c1.Stats.BiterateSent(dT)/1024)
 	fmt.Printf("Recv=%f pkt/s Sent=%f okt/s\n", c1.Stats.PacketsRecv(dT), c1.Stats.PacketsSent(dT))

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+
 	"os"
 	"os/signal"
 
@@ -39,15 +40,7 @@ func (c *DummyServerConnection) OnNewConnect(s *hermes.UDPServer, addr *net.UDPA
 }
 
 func (c *DummyServerConnection) OnReceiveData(s *hermes.UDPServer, p *hermes.Packet) error {
-	//_, err = s.conn.WriteToUDP(p.Data.Bytes(), c.RemoteAddr)
-	// if err != nil {
-	// 	if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
-	// 		continue
-	// 	} else {
-	// 		s.done <- err
-	// 		return
-	// 	}
-	// }
+	s.SendRawDataToClient(p.Addr, p)
 	return nil
 }
 

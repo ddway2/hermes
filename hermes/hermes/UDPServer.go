@@ -1,12 +1,14 @@
 package hermes
 
 import (
+	"fmt"
 	"net"
 	"time"
 )
 
 const (
 	SERVERUDP_DEFAULT_InputTimeoutMs  = 10
+	SERVERUDP_DEFAULT_OutputTimeoutMs = 10
 	SERVERUDP_DEFAULT_InputBufferSize = 1024 * 1024
 	SERVERUDP_DEFAULT_InputPacketSize = 50000
 	SERVERUDP_DEFAULT_InputMaxSize    = 1300
@@ -22,23 +24,27 @@ type UDPServerConn interface {
 type NewServerConnCallback func() (UDPServerConn, error)
 
 type UDPServer struct {
-	DNS             string
-	InputTimeoutMs  uint32
-	InputBufferSize int
-	InputPackets    []*Packet
-	InputPacketSize int
-	InputMaxSize    int
+	DNS            string
+	InputTimeoutMs uint32
+	BufferSize     int
+	Packets        []*Packet
+	PacketSize     int
+	MaxSize        int
 
 	OutputTimeoutMs uint32
 
 	MaxRemoteClient       uint32
 	NewConnectionCallback NewServerConnCallback
 
+	OutputStream chan *Packet
+
 	currentInputPacket int
 
 	conn          *net.UDPConn
 	done          chan error
 	udpConnection map[string]UDPServerConn
+
+	queue chan int
 }
 
 func NewUDPServer(cb NewServerConnCallback) *UDPServer {
@@ -46,9 +52,10 @@ func NewUDPServer(cb NewServerConnCallback) *UDPServer {
 		done: make(chan error, 1),
 
 		InputTimeoutMs:        SERVERUDP_DEFAULT_InputTimeoutMs,
-		InputBufferSize:       SERVERUDP_DEFAULT_InputBufferSize,
-		InputPacketSize:       SERVERUDP_DEFAULT_InputPacketSize,
-		InputMaxSize:          SERVERUDP_DEFAULT_InputMaxSize,
+		OutputTimeoutMs:       SERVERUDP_DEFAULT_OutputTimeoutMs,
+		BufferSize:            SERVERUDP_DEFAULT_InputBufferSize,
+		PacketSize:            SERVERUDP_DEFAULT_InputPacketSize,
+		MaxSize:               SERVERUDP_DEFAULT_InputMaxSize,
 		MaxRemoteClient:       SERVERUDP_DEFAULT_MaxRemoteClient,
 		NewConnectionCallback: cb,
 	}
@@ -56,10 +63,13 @@ func NewUDPServer(cb NewServerConnCallback) *UDPServer {
 
 func (s *UDPServer) init() error {
 	s.udpConnection = make(map[string]UDPServerConn)
-	s.InputPackets = make([]*Packet, s.InputPacketSize)
-	for i := 0; i < s.InputPacketSize; i++ {
-		s.InputPackets[i] = &Packet{}
-		s.InputPackets[i].Data.Grow(s.InputMaxSize)
+	s.Packets = make([]*Packet, s.PacketSize)
+	s.OutputStream = make(chan *Packet, s.PacketSize)
+	s.queue = make(chan int, s.PacketSize)
+	for i := 0; i < s.PacketSize; i++ {
+		s.Packets[i] = &Packet{Index: i}
+		s.Packets[i].Data.Grow(s.MaxSize)
+		s.queue <- i
 	}
 	s.currentInputPacket = 0
 	return nil
@@ -94,35 +104,98 @@ func (s *UDPServer) Close() error {
 	return nil
 }
 
-func (s *UDPServer) sendData() {
-	for {
-		deadline := time.Now().Add(time.Duration(s.OutputTimeoutMs) * time.Millisecond)
-		s.conn.SetWriteDeadline(deadline)
-
+func (s *UDPServer) NewPacket() (*Packet, error) {
+	var p *Packet
+	select {
+	case index := <-s.queue:
+		p = s.Packets[index]
+		p.Data.Reset()
+	case <-time.After(2 * time.Second):
+		return nil, fmt.Errorf("No packet available")
 	}
+	return p, nil
+}
+
+func (s *UDPServer) ReleasePacket(p *Packet) {
+	s.queue <- p.Index
+}
+
+func (s *UDPServer) SendDataToClient(addr *net.UDPAddr, packet Serialize) error {
+	var p *Packet
+	var err error
+	if p, err = s.NewPacket(); err != nil {
+		return err
+	}
+
+	err = packet.Write(&p.Data)
+
+	if err != nil {
+		s.ReleasePacket(p)
+		return err
+	}
+
+	// Let Go
+	s.OutputStream <- p
+	return nil
+}
+
+func (s *UDPServer) SendRawDataToClient(addr *net.UDPAddr, p *Packet) error {
+	// Let Go
+	s.OutputStream <- p
+	return nil
+}
+
+func (s *UDPServer) sendData() {
+	fmt.Println("Start sendData goroutine")
+	for {
+		var p *Packet
+		select {
+		case p = <-s.OutputStream:
+			deadline := time.Now().Add(time.Duration(s.OutputTimeoutMs) * time.Millisecond)
+			s.conn.SetWriteDeadline(deadline)
+
+			_, err := s.conn.WriteToUDP(p.Data.Bytes(), p.Addr)
+			s.ReleasePacket(p)
+			if err != nil {
+				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+					continue
+				} else {
+					s.done <- err
+				}
+			}
+		}
+	}
+	fmt.Println("End sendData goroutine")
 }
 
 func (s *UDPServer) receiveData() {
-	rdbuf := make([]byte, s.InputMaxSize)
+	rdbuf := make([]byte, s.MaxSize)
+	fmt.Println("Start receiveData goroutine")
 	for {
+		var p *Packet
+		var err error
+		if p, err = s.NewPacket(); err != nil {
+			continue
+		}
+
 		deadline := time.Now().Add(time.Duration(s.InputTimeoutMs) * time.Millisecond)
 		s.conn.SetReadDeadline(deadline)
 
-		p := s.InputPackets[s.currentInputPacket]
-		p.Data.Reset()
 		n, addr, err := s.conn.ReadFromUDP(rdbuf)
 
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+				s.ReleasePacket(p)
 				continue
 			} else {
 				s.done <- err
+				s.ReleasePacket(p)
 				return
 			}
 		}
 
 		p.Data.Write(rdbuf[:n])
-		s.currentInputPacket = (s.currentInputPacket + 1) % s.InputPacketSize
+		p.Addr = addr
 
 		if v, ok := s.udpConnection[addr.String()]; !ok {
 			if conn, err := s.NewConnectionCallback(); err == nil {
@@ -134,4 +207,5 @@ func (s *UDPServer) receiveData() {
 			v.OnReceiveData(s, p)
 		}
 	}
+	fmt.Println("End receiveData goroutine")
 }
