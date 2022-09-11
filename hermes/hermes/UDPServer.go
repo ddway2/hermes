@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"net"
+	"net/netip"
 	"time"
 )
 
@@ -16,33 +17,38 @@ const (
 
 type UDPServerConn interface {
 	OnNewConnect() error
+	OnReceiveData(p *Packet) error
 }
 
+type NewServerConnCallback func(addr netip.AddrPort) (UDPServerConn, error)
+
 type UDPServer struct {
-	DNS             string
-	InputTimeoutMs  uint32
-	InputBufferSize int
-	InputPackets    []*Packet
-	InputPacketSize int
-	InputMaxSize    int
-	MaxRemoteClient uint32
+	DNS                   string
+	InputTimeoutMs        uint32
+	InputBufferSize       int
+	InputPackets          []*Packet
+	InputPacketSize       int
+	InputMaxSize          int
+	MaxRemoteClient       uint32
+	NewConnectionCallback NewServerConnCallback
 
 	currentInputPacket int
 
 	conn          *net.UDPConn
 	done          chan error
-	udpConnection map[string]UDPServerConn
+	udpConnection map[netip.AddrPort]UDPServerConn
 }
 
-func newUDPServer() *UDPServer {
+func NewUDPServer(cb NewServerConnCallback) *UDPServer {
 	return &UDPServer{
 		done: make(chan error, 1),
 
-		InputTimeoutMs:  SERVERUDP_DEFAULT_InputTimeoutMs,
-		InputBufferSize: SERVERUDP_DEFAULT_InputBufferSize,
-		InputPacketSize: SERVERUDP_DEFAULT_InputPacketSize,
-		InputMaxSize:    SERVERUDP_DEFAULT_InputMaxSize,
-		MaxRemoteClient: SERVERUDP_DEFAULT_MaxRemoteClient,
+		InputTimeoutMs:        SERVERUDP_DEFAULT_InputTimeoutMs,
+		InputBufferSize:       SERVERUDP_DEFAULT_InputBufferSize,
+		InputPacketSize:       SERVERUDP_DEFAULT_InputPacketSize,
+		InputMaxSize:          SERVERUDP_DEFAULT_InputMaxSize,
+		MaxRemoteClient:       SERVERUDP_DEFAULT_MaxRemoteClient,
+		NewConnectionCallback: cb,
 	}
 }
 
@@ -80,6 +86,11 @@ func (s *UDPServer) Listen(DNS string) error {
 	return nil
 }
 
+func (s *UDPServer) Close() error {
+	s.conn.Close()
+	return nil
+}
+
 func (s *UDPServer) receiveData() {
 	rdbuf := make([]byte, s.InputMaxSize)
 	for {
@@ -101,6 +112,16 @@ func (s *UDPServer) receiveData() {
 
 		p.Data.Write(rdbuf[:n])
 		s.currentInputPacket = (s.currentInputPacket + 1) % s.InputPacketSize
+
+		if v, ok := s.udpConnection[addr]; !ok {
+			if conn, err := s.NewConnectionCallback(addr); err == nil {
+				s.udpConnection[addr] = conn
+				conn.OnNewConnect()
+				conn.OnReceiveData(p)
+			}
+		} else {
+			v.OnReceiveData(p)
+		}
 
 		_, err = s.conn.WriteToUDP(p.Data.Bytes(), addr)
 		if err != nil {

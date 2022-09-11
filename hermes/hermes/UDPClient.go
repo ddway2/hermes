@@ -37,6 +37,8 @@ type UDPClient struct {
 
 	conn *net.UDPConn
 	done chan error
+
+	Stats StatsClient
 }
 
 func NewUDPClient() *UDPClient {
@@ -109,13 +111,16 @@ func (c *UDPClient) sendData() {
 		case p = <-c.OutputStream:
 			deadline := time.Now().Add(time.Duration(c.OutputTimeoutMs) * time.Millisecond)
 			c.conn.SetWriteDeadline(deadline)
-			_, err := c.conn.Write(p.Data.Bytes())
+			size, err := c.conn.Write(p.Data.Bytes())
 			if err != nil {
 				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 					//timeout = true
 				} else {
 					c.done <- err
 				}
+			} else {
+				c.Stats.PacketSentSize = c.Stats.PacketSentSize + uint64(size)
+				c.Stats.PacketSentCount++
 			}
 		case <-c.done:
 			return
@@ -142,6 +147,9 @@ func (c *UDPClient) receiveData() {
 				c.done <- err
 				return
 			}
+		} else {
+			c.Stats.PacketRecvSize = c.Stats.PacketRecvSize + uint64(n)
+			c.Stats.PacketRecvCount++
 		}
 
 		p.Data.Write(rdbuf[:n])
