@@ -20,9 +20,14 @@ func (p *DummyPacket) Read(b *bytes.Buffer) error {
 	return err
 }
 
+func serverConnections() (UDPServerConn, error) {
+	var result UDPServerConn
+	return result, nil
+}
+
 func BenchmarkConnect(b *testing.B) {
 	c1 := NewUDPClient()
-	srv := newUDPServer()
+	srv := NewUDPServer(serverConnections)
 
 	srv.Listen(":4567")
 
