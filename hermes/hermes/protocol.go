@@ -3,7 +3,10 @@ package hermes
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"net"
+
+	"github.com/go-git/go-git/v5/utils/binary"
 )
 
 type Serialize interface {
@@ -15,37 +18,54 @@ type Deserialize interface {
 }
 
 type Packet struct {
-	Addr  *net.UDPAddr
-	Index int
-	Data  bytes.Buffer
-	Size  int
+	Addr *net.UDPAddr
+	Data bytes.Buffer
+	Size int
 }
 
-type InitPackage struct {
-}
-
-type Flag uint16
+type Flag uint32
 
 const (
-	FlagPush Flag = 1 << iota
-	FlagAck
-	FlagReset
+	PTYPE_INIT Flag = iota
+	PTYPE_CHALLENGE
+	PTYPE_CHALLENGE_ACK
+	PTYPE_DATA
+	PTYPE_ACK
+	PTYPE_DISCONNECT
 )
 
-type PacketLayer struct {
-	Seq  uint16
-	Ack  uint16
-	Flag Flag
-	Crc  uint16
-	Data [100]byte // Only 100 bytes
+type PHeader struct {
+	Game uint32
+	Type Flag
+	Id   uint32
+	Crc  uint32
 }
 
-func (p *PacketLayer) Write(b *bytes.Buffer) error {
-	binary.Write(b, binary.LittleEndian, p)
+type PMsgInit struct {
+	Salt uint32
+	Addr uint32
+	Port uint16
+}
+
+func (h *PHeader) Deserialize(buf *bytes.Buffer) error {
+	if buf.Len() < 16 {
+		return fmt.Errorf("PHeader read error")
+	}
+	rbuf := buf.Next(16)
+	h.Game = binary.LittleEndian.Uint32(rbuf[0:])
+	h.Type = Flag(binary.LittleEndian.Uint32(rbuf[4:]))
+	h.Id = binary.LittleEndian.Uint32(rbuf[8:])
+	h.Crc = binary.LittleEndian.Uint32(rbuf[12:])
 	return nil
 }
 
-func (p *PacketLayer) Read(b *bytes.Buffer) error {
-	binary.Read(b, binary.LittleEndian, p)
+func (h *PMsgInit) Deserialize(buf *bytes.Buffer) error {
+	if buf.Len() < 10 {
+		return fmt.Errorf("PMsgInit read error")
+	}
+	rbuf := buf.Next(10)
+	h.Salt = binary.LittleEndian.Uint32(rbuf[0:])
+	h.Addr = binary.LittleEndian.Uint32(rbuf[4:])
+	h.Port = binary.LittleEndian.Uint16(rbuf[8:])
 	return nil
 }

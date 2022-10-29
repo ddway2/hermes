@@ -3,6 +3,7 @@ package hermes
 import (
 	"fmt"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -24,54 +25,43 @@ type UDPServerConn interface {
 type NewServerConnCallback func() (UDPServerConn, error)
 
 type UDPServer struct {
-	DNS            string
-	InputTimeoutMs uint32
-	BufferSize     int
-	Packets        []*Packet
-	PacketSize     int
-	MaxSize        int
-
+	DNS             string
+	InputTimeoutMs  uint32
 	OutputTimeoutMs uint32
 
 	MaxRemoteClient       uint32
 	NewConnectionCallback NewServerConnCallback
 
-	OutputStream chan *Packet
+	poolPacket    sync.Pool
+	MaxPacketSize int
 
-	currentInputPacket int
-
-	conn          *net.UDPConn
-	done          chan error
-	udpConnection map[string]UDPServerConn
-
-	queue chan int
+	conn *net.UDPConn
+	done chan error
+	//udpConnection map[uint32]*UDPServerConnection
+	udpClient sync.Map
 }
 
 func NewUDPServer(cb NewServerConnCallback) *UDPServer {
 	return &UDPServer{
 		done: make(chan error, 1),
 
-		InputTimeoutMs:        SERVERUDP_DEFAULT_InputTimeoutMs,
-		OutputTimeoutMs:       SERVERUDP_DEFAULT_OutputTimeoutMs,
-		BufferSize:            SERVERUDP_DEFAULT_InputBufferSize,
-		PacketSize:            SERVERUDP_DEFAULT_InputPacketSize,
-		MaxSize:               SERVERUDP_DEFAULT_InputMaxSize,
+		InputTimeoutMs:  SERVERUDP_DEFAULT_InputTimeoutMs,
+		OutputTimeoutMs: SERVERUDP_DEFAULT_OutputTimeoutMs,
+
+		poolPacket: sync.Pool{
+			New: func() any {
+				res := new(Packet)
+				res.Data.Grow(SERVERUDP_DEFAULT_InputMaxSize)
+				return res
+			},
+		},
+
 		MaxRemoteClient:       SERVERUDP_DEFAULT_MaxRemoteClient,
 		NewConnectionCallback: cb,
 	}
 }
 
 func (s *UDPServer) init() error {
-	s.udpConnection = make(map[string]UDPServerConn)
-	s.Packets = make([]*Packet, s.PacketSize)
-	s.OutputStream = make(chan *Packet, s.PacketSize)
-	s.queue = make(chan int, s.PacketSize)
-	for i := 0; i < s.PacketSize; i++ {
-		s.Packets[i] = &Packet{Index: i}
-		s.Packets[i].Data.Grow(s.MaxSize)
-		s.queue <- i
-	}
-	s.currentInputPacket = 0
 	return nil
 }
 
@@ -104,33 +94,19 @@ func (s *UDPServer) Close() error {
 	return nil
 }
 
-func (s *UDPServer) NewPacket() (*Packet, error) {
-	var p *Packet
-	select {
-	case index := <-s.queue:
-		p = s.Packets[index]
-		p.Data.Reset()
-	case <-time.After(2 * time.Second):
-		return nil, fmt.Errorf("No packet available")
-	}
-	return p, nil
-}
-
-func (s *UDPServer) ReleasePacket(p *Packet) {
-	s.queue <- p.Index
-}
-
 func (s *UDPServer) SendDataToClient(addr *net.UDPAddr, packet Serialize) error {
 	var p *Packet
 	var err error
-	if p, err = s.NewPacket(); err != nil {
-		return err
+
+	p = s.poolPacket.Get().(*Packet)
+	if p == nil {
+		return fmt.Errorf("Pool Get Error")
 	}
 
 	err = packet.Write(&p.Data)
 
 	if err != nil {
-		s.ReleasePacket(p)
+		s.poolPacket.Put(p)
 		return err
 	}
 
@@ -155,7 +131,7 @@ func (s *UDPServer) sendData() {
 			s.conn.SetWriteDeadline(deadline)
 
 			_, err := s.conn.WriteToUDP(p.Data.Bytes(), p.Addr)
-			s.ReleasePacket(p)
+			s.poolPacket.Put(p)
 			if err != nil {
 				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 					continue
@@ -169,12 +145,14 @@ func (s *UDPServer) sendData() {
 }
 
 func (s *UDPServer) receiveData() {
-	rdbuf := make([]byte, s.MaxSize)
+	rdbuf := make([]byte, SERVERUDP_DEFAULT_InputMaxSize)
 	fmt.Println("Start receiveData goroutine")
+	var header PHeader
 	for {
 		var p *Packet
 		var err error
-		if p, err = s.NewPacket(); err != nil {
+		p = s.poolPacket.Get().(*Packet)
+		if p == nil {
 			continue
 		}
 
@@ -185,11 +163,11 @@ func (s *UDPServer) receiveData() {
 
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
-				s.ReleasePacket(p)
+				s.poolPacket.Put(p)
 				continue
 			} else {
 				s.done <- err
-				s.ReleasePacket(p)
+				s.poolPacket.Put(p)
 				return
 			}
 		}
@@ -197,15 +175,31 @@ func (s *UDPServer) receiveData() {
 		p.Data.Write(rdbuf[:n])
 		p.Addr = addr
 
-		if v, ok := s.udpConnection[addr.String()]; !ok {
-			if conn, err := s.NewConnectionCallback(); err == nil {
-				s.udpConnection[addr.String()] = conn
-				conn.OnNewConnect(s, addr)
-				conn.OnReceiveData(s, p)
-			}
-		} else {
-			v.OnReceiveData(s, p)
+		if err = header.Deserialize(&p.Data); err != nil {
+			continue
 		}
+
+		s.dispatchData(header, p)
+
+		// if v, ok := s.udpConnection[addr.String()]; !ok {
+		// 	if conn, err := s.NewConnectionCallback(); err == nil {
+		// 		s.udpConnection[addr.String()] = conn
+		// 		conn.OnNewConnect(s, addr)
+		// 		conn.OnReceiveData(s, p)
+		// 	}
+		// } else {
+		// 	v.OnReceiveData(s, p)
+		// }
 	}
 	fmt.Println("End receiveData goroutine")
+}
+
+func (s *UDPServer) dispatchData(h PHeader, p *Packet) error {
+	switch h.Type {
+	case PTYPE_INIT:
+
+	default:
+		return fmt.Errorf("Unknown Message type")
+	}
+	return nil
 }
